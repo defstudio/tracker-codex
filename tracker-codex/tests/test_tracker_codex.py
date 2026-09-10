@@ -17,6 +17,16 @@ SPEC.loader.exec_module(tracker_codex)
 
 
 class TrackerCodexTest(unittest.TestCase):
+    def test_heartbeat_uses_the_tracker_codex_user_agent(self) -> None:
+        config = {"server_url": "https://tracker.test", "token": "secret", "device_id": 1}
+        event = {"hook_event_name": "PostToolUse", "session_id": "session-1", "cwd": "/code/tracker"}
+
+        with patch.object(tracker_codex.urllib.request, "urlopen") as urlopen:
+            tracker_codex.record_heartbeat(config, event, 45, "git@example.test:acme/tracker.git")
+
+        request = urlopen.call_args.args[0]
+        self.assertEqual(tracker_codex.USER_AGENT, request.get_header("User-agent"))
+
     def test_detects_files_changed_in_a_nested_repository(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             workspace = Path(temporary_directory)

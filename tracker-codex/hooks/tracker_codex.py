@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 
 MAX_ACTIVE_SECONDS = 300
+USER_AGENT = "Tracker-Codex/0.3 (+https://tracker.defstudio.dev)"
 STATE_FILE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "tracker-codex" / "sessions.json"
 CONFIG_FILE = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "tracker-codex" / "config.json"
 MAX_REPOSITORY_DEPTH = 4
@@ -226,6 +227,7 @@ def record_heartbeat(config: dict[str, Any], event: dict[str, Any], active_secon
         headers={
             "Authorization": f'Bearer {config["token"]}',
             "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
         },
         method="POST",
     )
