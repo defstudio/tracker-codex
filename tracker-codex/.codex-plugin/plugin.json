@@ -1,5 +1,5 @@
 {
-  "name": "codex-plugin",
+  "name": "tracker-codex",
   "version": "0.1.0",
   "description": "Tracks active Codex work in Tracker.",
   "author": {
