@@ -18,4 +18,6 @@ To verify the setup without revealing the token:
 python3 tracker-codex/hooks/tracker_codex.py status
 ```
 
-The hook sends data only when this configuration is valid and the current directory has an `origin` Git remote.
+The hook takes a Git snapshot when a Codex session starts. On later hooks it detects changed, staged, untracked, deleted, and newly committed files, including repositories nested below the workspace such as `backend`, `laravel`, or `src`. It sends each changed repository as a separate heartbeat, with relative file paths in the event metadata.
+
+Files that were already modified when the session started are excluded unless their state changes during the session. The plugin does not capture file contents, prompts, or tool output.

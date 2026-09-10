@@ -13,13 +13,20 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 from urllib.parse import urlparse
 
 
 MAX_ACTIVE_SECONDS = 300
 STATE_FILE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "tracker-codex" / "sessions.json"
 CONFIG_FILE = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "tracker-codex" / "config.json"
+MAX_REPOSITORY_DEPTH = 4
+IGNORED_DIRECTORIES = {".git", ".idea", ".venv", "node_modules", "vendor"}
+
+
+class RepositorySnapshot(TypedDict):
+    head: str | None
+    paths: list[str]
 
 
 def load_config() -> dict[str, Any] | None:
@@ -91,10 +98,10 @@ def print_status() -> None:
     print(f"Tracker Codex is configured for {config['server_url']} (device {config['device_id']}).")
 
 
-def git_remote(cwd: str) -> str | None:
+def git_output(cwd: str, *args: str) -> str | None:
     try:
         result = subprocess.run(
-            ["git", "-C", cwd, "config", "--get", "remote.origin.url"],
+            ["git", "-C", cwd, *args],
             check=False,
             capture_output=True,
             text=True,
@@ -106,10 +113,77 @@ def git_remote(cwd: str) -> str | None:
     if result.returncode != 0:
         return None
 
-    return result.stdout.strip() or None
+    return result.stdout or None
 
 
-def load_state(handle: Any) -> dict[str, float]:
+def git_remote(cwd: str) -> str | None:
+    remote = git_output(cwd, "config", "--get", "remote.origin.url")
+
+    return remote.strip() if remote is not None else None
+
+
+def git_root(cwd: str) -> str | None:
+    root = git_output(cwd, "rev-parse", "--show-toplevel")
+
+    return root.strip() if root is not None else None
+
+
+def discover_repositories(cwd: str) -> list[str]:
+    workspace = Path(cwd).resolve()
+    repositories: set[str] = set()
+
+    root = git_root(str(workspace))
+    if root is not None:
+        repositories.add(root)
+
+    for directory, children, _ in os.walk(workspace):
+        path = Path(directory)
+        depth = len(path.relative_to(workspace).parts)
+        children[:] = [child for child in children if child not in IGNORED_DIRECTORIES]
+        if depth >= MAX_REPOSITORY_DEPTH:
+            children.clear()
+
+        if (path / ".git").exists():
+            root = git_root(str(path))
+            if root is not None:
+                repositories.add(root)
+
+    return sorted(repositories)
+
+
+def dirty_paths(repository: str) -> set[str]:
+    status = git_output(repository, "status", "--porcelain=v1", "--untracked-files=all")
+    if status is None:
+        return set()
+
+    return {line[3:] for line in status.splitlines() if len(line) > 3}
+
+
+def snapshot_repositories(cwd: str) -> dict[str, RepositorySnapshot]:
+    return {
+        repository: {
+            "head": (git_output(repository, "rev-parse", "HEAD") or "").strip() or None,
+            "paths": sorted(dirty_paths(repository)),
+        }
+        for repository in discover_repositories(cwd)
+    }
+
+
+def changed_paths(repository: str, previous: RepositorySnapshot | None, current: RepositorySnapshot) -> list[str]:
+    paths = set(current["paths"])
+    if previous is None:
+        return sorted(paths)
+
+    paths.symmetric_difference_update(previous["paths"])
+    if previous["head"] != current["head"] and previous["head"] is not None and current["head"] is not None:
+        commits = git_output(repository, "diff", "--name-only", f'{previous["head"]}..{current["head"]}')
+        if commits is not None:
+            paths.update(path for path in commits.splitlines() if path)
+
+    return sorted(paths)
+
+
+def load_state(handle: Any) -> dict[str, Any]:
     handle.seek(0)
     try:
         return json.load(handle)
@@ -117,7 +191,7 @@ def load_state(handle: Any) -> dict[str, float]:
         return {}
 
 
-def save_state(handle: Any, state: dict[str, float]) -> None:
+def save_state(handle: Any, state: dict[str, Any]) -> None:
     handle.seek(0)
     handle.truncate()
     json.dump(state, handle)
@@ -125,7 +199,7 @@ def save_state(handle: Any, state: dict[str, float]) -> None:
     os.fsync(handle.fileno())
 
 
-def record_heartbeat(config: dict[str, Any], event: dict[str, Any], active_seconds: int, remote: str) -> None:
+def record_heartbeat(config: dict[str, Any], event: dict[str, Any], active_seconds: int, remote: str | None, repository_root: str | None = None, changed_files: list[str] | None = None) -> None:
     if active_seconds <= 0:
         return
 
@@ -141,6 +215,8 @@ def record_heartbeat(config: dict[str, Any], event: dict[str, Any], active_secon
                 "event": event["hook_event_name"],
                 "model": event.get("model"),
                 "session_id": event["session_id"],
+                "repository_root": repository_root,
+                "changed_files": changed_files or [],
             },
         }
     ).encode()
@@ -159,6 +235,23 @@ def record_heartbeat(config: dict[str, Any], event: dict[str, Any], active_secon
             pass
     except (urllib.error.URLError, TimeoutError, ValueError):
         pass
+
+
+def record_changed_repositories(config: dict[str, Any], event: dict[str, Any], active_seconds: int, previous: dict[str, RepositorySnapshot], current: dict[str, RepositorySnapshot]) -> None:
+    changed = [
+        (repository, changed_paths(repository, previous.get(repository), snapshot))
+        for repository, snapshot in current.items()
+    ]
+    changed = [(repository, paths) for repository, paths in changed if paths]
+
+    if changed:
+        for repository, paths in changed:
+            record_heartbeat(config, event, active_seconds, git_remote(repository), repository, paths)
+
+        return
+
+    repository = git_root(event["cwd"])
+    record_heartbeat(config, event, active_seconds, git_remote(repository) if repository is not None else None, repository)
 
 
 def main() -> None:
@@ -181,10 +274,6 @@ def main() -> None:
     if config is None or not event.get("session_id") or not event.get("cwd"):
         return
 
-    remote = git_remote(event["cwd"])
-    if remote is None:
-        return
-
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     now = time.time()
 
@@ -199,12 +288,15 @@ def main() -> None:
             save_state(handle, state)
             return
 
-        if hook_event != "SessionStart":
-            state[key] = now
-            save_state(handle, state)
+        current = {"timestamp": now, "repositories": snapshot_repositories(event["cwd"])}
+        state[key] = current
+        save_state(handle, state)
 
     if hook_event in {"UserPromptSubmit", "PostToolUse", "Stop", "Interrupt"} and previous is not None:
-        record_heartbeat(config, event, min(int(now - previous), MAX_ACTIVE_SECONDS), remote)
+        previous_timestamp = previous.get("timestamp", previous) if isinstance(previous, dict) else previous
+        previous_repositories = previous.get("repositories", {}) if isinstance(previous, dict) else {}
+        if isinstance(previous_timestamp, (float, int)):
+            record_changed_repositories(config, event, min(int(now - previous_timestamp), MAX_ACTIVE_SECONDS), previous_repositories, current["repositories"])
 
 
 if __name__ == "__main__":

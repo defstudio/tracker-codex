@@ -1,6 +1,6 @@
 {
   "name": "tracker-codex",
-  "version": "0.3.0",
+  "version": "0.3.0+codex.20260910152956",
   "description": "Tracks active Codex work in Tracker.",
   "author": {
     "name": "Local developer"
