@@ -132,7 +132,7 @@ def record_heartbeat(config: dict[str, Any], event: dict[str, Any], active_secon
     payload = json.dumps(
         {
             "device_id": config["device_id"],
-            "type": "codex_heartbeat",
+            "type": "heartbeat",
             "path": event["cwd"],
             "git_remote": remote,
             "occurred_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -145,7 +145,7 @@ def record_heartbeat(config: dict[str, Any], event: dict[str, Any], active_secon
         }
     ).encode()
     request = urllib.request.Request(
-        f'{config["server_url"]}/api/events/ide',
+        f'{config["server_url"]}/api/events/codex',
         data=payload,
         headers={
             "Authorization": f'Bearer {config["token"]}',
