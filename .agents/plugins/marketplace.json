@@ -8,7 +8,7 @@
       "name": "tracker-codex",
       "source": {
         "source": "local",
-        "path": "./plugin"
+        "path": "./tracker-codex"
       },
       "policy": {
         "installation": "AVAILABLE",
