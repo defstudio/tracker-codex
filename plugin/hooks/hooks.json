@@ -1,0 +1,11 @@
+{
+  "description": "Record active Codex time in Tracker without capturing prompts or tool output.",
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "python3 \"$PLUGIN_ROOT/hooks/tracker_codex.py\""}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python3 \"$PLUGIN_ROOT/hooks/tracker_codex.py\""}]}],
+    "PostToolUse": [{"hooks": [{"type": "command", "command": "python3 \"$PLUGIN_ROOT/hooks/tracker_codex.py\"", "async": true, "timeout": 3}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "python3 \"$PLUGIN_ROOT/hooks/tracker_codex.py\"", "timeout": 3}]}],
+    "Interrupt": [{"hooks": [{"type": "command", "command": "python3 \"$PLUGIN_ROOT/hooks/tracker_codex.py\"", "timeout": 3}]}],
+    "SessionEnd": [{"hooks": [{"type": "command", "command": "python3 \"$PLUGIN_ROOT/hooks/tracker_codex.py\"", "timeout": 3}]}]
+  }
+}
