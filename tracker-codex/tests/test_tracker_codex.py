@@ -53,6 +53,24 @@ class TrackerCodexTest(unittest.TestCase):
 
             record_heartbeat.assert_called_once_with(config, event, 45, "git@example.test:acme/tracker.git", str(repository), ["app.php"])
 
+    def test_detects_a_new_change_to_an_already_dirty_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            repository = Path(temporary_directory)
+            subprocess.run(["git", "init", "-q", str(repository)], check=True)
+            subprocess.run(["git", "-C", str(repository), "config", "user.email", "tests@example.com"], check=True)
+            subprocess.run(["git", "-C", str(repository), "config", "user.name", "Tests"], check=True)
+            file = repository / "app.php"
+            file.write_text("<?php\n")
+            subprocess.run(["git", "-C", str(repository), "add", "app.php"], check=True)
+            subprocess.run(["git", "-C", str(repository), "-c", "commit.gpgSign=false", "commit", "-qm", "Initial"], check=True)
+
+            file.write_text("<?php\n// first change\n")
+            previous = tracker_codex.snapshot_repositories(str(repository))
+            file.write_text("<?php\n// second change\n")
+            current = tracker_codex.snapshot_repositories(str(repository))
+
+            self.assertEqual(["app.php"], tracker_codex.changed_paths(str(repository), previous[str(repository)], current[str(repository)]))
+
     def test_session_start_saves_the_initial_repository_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             state_file = Path(temporary_directory) / "sessions.json"

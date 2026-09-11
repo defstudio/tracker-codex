@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import fcntl
 import getpass
+import hashlib
 import json
 import os
 import subprocess
@@ -28,6 +29,7 @@ IGNORED_DIRECTORIES = {".git", ".idea", ".venv", "node_modules", "vendor"}
 class RepositorySnapshot(TypedDict):
     head: str | None
     paths: list[str]
+    fingerprints: dict[str, str]
 
 
 def load_config() -> dict[str, Any] | None:
@@ -160,14 +162,37 @@ def dirty_paths(repository: str) -> set[str]:
     return {line[3:] for line in status.splitlines() if len(line) > 3}
 
 
+def file_fingerprint(repository: str, path: str) -> str:
+    digest = hashlib.sha256()
+
+    # The index object changes when a dirty file is staged again, even if its
+    # working-tree contents did not change.
+    digest.update((git_output(repository, "ls-files", "--stage", "--", path) or "").encode())
+    file_path = Path(repository, path)
+
+    try:
+        with file_path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        # A deleted file has no working-tree contents. Its index state above is
+        # still enough to distinguish it from a present file.
+        digest.update(b"missing")
+
+    return digest.hexdigest()
+
+
 def snapshot_repositories(cwd: str) -> dict[str, RepositorySnapshot]:
-    return {
-        repository: {
+    snapshots: dict[str, RepositorySnapshot] = {}
+    for repository in discover_repositories(cwd):
+        paths = sorted(dirty_paths(repository))
+        snapshots[repository] = {
             "head": (git_output(repository, "rev-parse", "HEAD") or "").strip() or None,
-            "paths": sorted(dirty_paths(repository)),
+            "paths": paths,
+            "fingerprints": {path: file_fingerprint(repository, path) for path in paths},
         }
-        for repository in discover_repositories(cwd)
-    }
+
+    return snapshots
 
 
 def changed_paths(repository: str, previous: RepositorySnapshot | None, current: RepositorySnapshot) -> list[str]:
@@ -176,6 +201,12 @@ def changed_paths(repository: str, previous: RepositorySnapshot | None, current:
         return sorted(paths)
 
     paths.symmetric_difference_update(previous["paths"])
+    previous_fingerprints = previous.get("fingerprints", {})
+    paths.update(
+        path
+        for path, fingerprint in current["fingerprints"].items()
+        if path in previous_fingerprints and previous_fingerprints[path] != fingerprint
+    )
     if previous["head"] != current["head"] and previous["head"] is not None and current["head"] is not None:
         commits = git_output(repository, "diff", "--name-only", f'{previous["head"]}..{current["head"]}')
         if commits is not None:
